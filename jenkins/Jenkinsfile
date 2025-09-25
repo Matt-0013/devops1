@@ -15,13 +15,28 @@ pipeline {
     }
 
     stage('Frontend Test & Lint') {
+      agent {
+        kubernetes {
+          yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: node
+    image: node:18
+    command: ["cat"]
+    tty: true
+"""
+        }
+      }
       steps {
-        dir('frontend') {
-          // Use NodeJS plugin environment
-          nodejs(nodeJSInstallationName: 'NodeJS-18') {
-            sh 'npm ci'
-            sh 'npm run lint'
-            sh 'npm test || echo "No frontend tests found, skipping..."'
+        container('node') {
+          dir('frontend') {
+            sh '''
+              npm ci
+              npm run lint
+              npm test || echo "No frontend tests found, skipping..."
+            '''
           }
         }
       }
@@ -29,33 +44,64 @@ pipeline {
 
     stage('Backend Test & Lint') {
       agent {
-        docker {
-          image 'python:3.10'  // Use official Python image
-          args '-u root:root'  // Optional, avoids permissions issues
+        kubernetes {
+          yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: python
+    image: python:3.10
+    command: ["cat"]
+    tty: true
+"""
         }
       }
       steps {
-        dir('backend') {
-          sh 'pip install --no-cache-dir -r requirements.txt'
-          sh 'flake8 . || echo "Lint warnings found"'
-          sh 'pytest || echo "No backend tests found, skipping..."'
+        container('python') {
+          dir('backend') {
+            sh '''
+              pip install --no-cache-dir -r requirements.txt
+              flake8 . || echo "Lint warnings found"
+              pytest || echo "No backend tests found, skipping..."
+            '''
+          }
         }
       }
     }
 
-    stage('Build Docker Images') {
-      steps {
-        sh 'docker build -t $FRONTEND_IMAGE ./frontend'
-        sh 'docker build -t $BACKEND_IMAGE ./backend'
+    stage('Build & Push Images') {
+      agent {
+        kubernetes {
+          yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: kaniko
+    image: gcr.io/kaniko-project/executor:latest
+    command: ["cat"]
+    tty: true
+    volumeMounts:
+    - name: kaniko-secret
+      mountPath: /kaniko/.docker/
+  volumes:
+  - name: kaniko-secret
+    emptyDir: {}
+"""
+        }
       }
-    }
-
-    stage('Push Images') {
       steps {
-        withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-          sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
-          sh 'docker push $FRONTEND_IMAGE'
-          sh 'docker push $BACKEND_IMAGE'
+        container('kaniko') {
+          withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+            sh '''
+              mkdir -p /kaniko/.docker
+              echo "{\"auths\":{\"https://index.docker.io/v1/\":{\"username\":\"$DOCKER_USER\",\"password\":\"$DOCKER_PASS\"}}}" > /kaniko/.docker/config.json
+
+              /kaniko/executor --context `pwd`/frontend --dockerfile `pwd`/frontend/Dockerfile --destination=$FRONTEND_IMAGE
+              /kaniko/executor --context `pwd`/backend --dockerfile `pwd`/backend/Dockerfile --destination=$BACKEND_IMAGE
+            '''
+          }
         }
       }
     }
