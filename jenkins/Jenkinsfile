@@ -9,14 +9,16 @@ pipeline {
 
   stages {
     stage('Checkout') {
-      agent { label 'default' }   // use default Jenkins agent
+      //agent { label 'default' }   // use default Jenkins agent
+      agent any
       steps {
         checkout scm
       }
     }
 
     stage('Frontend Test & Lint') {
-      agent { label 'default' }   // run on default pod (with NodeJS tools)
+      agent any
+      //agent { label 'default' }   // run on default pod (with NodeJS tools)
       steps {
         dir('frontend') {
           sh '''
@@ -29,7 +31,8 @@ pipeline {
     }
 
     stage('Backend Test & Lint') {
-      agent { label 'default' }   // run on default pod (with Python tools)
+      agent any
+      //agent { label 'default' }   // run on default pod (with Python tools)
       steps {
         dir('backend') {
           sh '''
