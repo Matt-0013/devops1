@@ -1,24 +1,27 @@
 pipeline {
-  agent none   // we will assign agents per stage
+  agent none   // define agents per stage
 
   environment {
-    REGISTRY = 'matt013'     // 🔹 replace with your DockerHub username
-    FRONTEND_IMAGE = "${REGISTRY}/frontend:latest"
-    BACKEND_IMAGE = "${REGISTRY}/backend:latest"
+    REGISTRY        = 'matt013'     // 🔹 your DockerHub username
+    FRONTEND_IMAGE  = "${REGISTRY}/frontend:latest"
+    BACKEND_IMAGE   = "${REGISTRY}/backend:latest"
   }
 
   stages {
     stage('Checkout') {
-      //agent { label 'default' }   // use default Jenkins agent
-      agent any
+      agent { label 'default' }  // use any pod with git (default Jenkins agent is fine)
       steps {
         checkout scm
       }
     }
 
     stage('Frontend Test & Lint') {
-      agent any
-      //agent { label 'default' }   // run on default pod (with NodeJS tools)
+      agent {
+        kubernetes {
+          label 'nodejs'
+          defaultContainer 'node'
+        }
+      }
       steps {
         dir('frontend') {
           sh '''
@@ -31,8 +34,12 @@ pipeline {
     }
 
     stage('Backend Test & Lint') {
-      agent any
-      //agent { label 'default' }   // run on default pod (with Python tools)
+      agent {
+        kubernetes {
+          label 'python'
+          defaultContainer 'python'
+        }
+      }
       steps {
         dir('backend') {
           sh '''
@@ -83,7 +90,12 @@ pipeline {
     }
 
     stage('Deploy to Kubernetes') {
-      agent { label 'default' }   // use default pod where kubectl is available
+      agent {
+        kubernetes {
+          label 'kubectl'
+          defaultContainer 'kubectl'
+        }
+      }
       steps {
         sh 'kubectl apply -f k8s/'
       }
