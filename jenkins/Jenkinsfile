@@ -9,7 +9,7 @@ pipeline {
 
   stages {
     stage('Checkout') {
-      agent any   // runs on controller or any agent
+      agent { label 'nodejs' }   // runs on controller or any agent
       steps {
         checkout scm
       }
