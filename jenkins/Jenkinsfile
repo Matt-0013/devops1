@@ -1,10 +1,16 @@
 pipeline {
-  agent any
-  environment {
-    REGISTRY = 'your-dockerhub-username'   // 🔹 Replace with your DockerHub username
-    FRONTEND_IMAGE = "${REGISTRY}/frontend:latest"
-    BACKEND_IMAGE  = "${REGISTRY}/backend:latest"
+  agent {
+    kubernetes {
+      label 'kaniko'
+    }
   }
+
+  environment {
+    REGISTRY = 'matt013'     // 🔹 replace with your DockerHub username
+    FRONTEND_IMAGE = "${REGISTRY}/frontend:latest"
+    BACKEND_IMAGE = "${REGISTRY}/backend:latest"
+  }
+
   stages {
     stage('Checkout') {
       steps {
@@ -15,10 +21,12 @@ pipeline {
     stage('Frontend Test & Lint') {
       steps {
         dir('frontend') {
-          nodejs(nodeJSInstallationName: 'NodeJS-18') {
-            sh 'npm ci'
-            sh 'npm run lint'
-            sh 'npm test || true'   // ✅ Jest exits 0 if no tests found
+          container('jnlp') {   // NodeJS runs in Jenkins agent container
+            sh '''
+              npm ci
+              npm run lint
+              npm test
+            '''
           }
         }
       }
@@ -27,72 +35,52 @@ pipeline {
     stage('Backend Test & Lint') {
       steps {
         dir('backend') {
-          sh 'pip install -r requirements.txt'
-          sh 'flake8 .'
-          sh 'pytest || true'
-        }
-      }
-    }
-
-    stage('Build & Push Frontend with Kaniko') {
-      steps {
-        containerTemplate(
-          name: 'kaniko',
-          image: 'gcr.io/kaniko-project/executor:latest',
-          command: '',
-          args: 'sleep 99d',
-          ttyEnabled: true,
-          envVars: [
-            containerEnvVar(key: 'DOCKER_CONFIG', value: '/kaniko/.docker/')
-          ],
-          volumeMounts: [
-            secretVolume(mountPath: '/kaniko/.docker', secretName: 'dockerhub-secret')
-          ]
-        ) {
-          container('kaniko') {
-            sh """
-              /kaniko/executor \
-                --context `pwd`/frontend \
-                --dockerfile `pwd`/frontend/Dockerfile \
-                --destination=$FRONTEND_IMAGE \
-                --verbosity=debug
-            """
+          container('jnlp') {   // Python runs in Jenkins agent container
+            sh '''
+              pip install -r requirements.txt
+              flake8 .
+              pytest
+            '''
           }
         }
       }
     }
 
-    stage('Build & Push Backend with Kaniko') {
+    stage('Build & Push Frontend') {
       steps {
-        containerTemplate(
-          name: 'kaniko',
-          image: 'gcr.io/kaniko-project/executor:latest',
-          command: '',
-          args: 'sleep 99d',
-          ttyEnabled: true,
-          envVars: [
-            containerEnvVar(key: 'DOCKER_CONFIG', value: '/kaniko/.docker/')
-          ],
-          volumeMounts: [
-            secretVolume(mountPath: '/kaniko/.docker', secretName: 'dockerhub-secret')
-          ]
-        ) {
-          container('kaniko') {
-            sh """
-              /kaniko/executor \
-                --context `pwd`/backend \
-                --dockerfile `pwd`/backend/Dockerfile \
-                --destination=$BACKEND_IMAGE \
-                --verbosity=debug
-            """
-          }
+        container('kaniko') {
+          sh '''
+            /kaniko/executor \
+              --context=./frontend \
+              --dockerfile=./frontend/Dockerfile \
+              --destination=$FRONTEND_IMAGE \
+              --insecure \
+              --skip-tls-verify
+          '''
+        }
+      }
+    }
+
+    stage('Build & Push Backend') {
+      steps {
+        container('kaniko') {
+          sh '''
+            /kaniko/executor \
+              --context=./backend \
+              --dockerfile=./backend/Dockerfile \
+              --destination=$BACKEND_IMAGE \
+              --insecure \
+              --skip-tls-verify
+          '''
         }
       }
     }
 
     stage('Deploy to Kubernetes') {
       steps {
-        sh 'kubectl apply -f k8s/'
+        container('jnlp') {
+          sh 'kubectl apply -f k8s/'
+        }
       }
     }
   }
