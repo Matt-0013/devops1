@@ -7,7 +7,6 @@ Production-ready CI/CD pipeline for a React.js frontend and Flask backend using 
 
 <img width="1536" height="1024" alt="architecture.png" src="https://github.com/user-attachments/assets/3f1333b6-d288-4e1b-88ea-9d4be583ceb9" />
 
-![Architecture Diagram](docs/architecture.png) <!-- Placeholder: Replace with your diagram -->
 
 ## Setup Instructions
 
