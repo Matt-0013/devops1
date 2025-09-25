@@ -1,9 +1,5 @@
 pipeline {
-  agent {
-    kubernetes {
-      label 'kaniko'
-    }
-  }
+  agent none   // we will assign agents per stage
 
   environment {
     REGISTRY = 'matt013'     // 🔹 replace with your DockerHub username
@@ -13,74 +9,80 @@ pipeline {
 
   stages {
     stage('Checkout') {
+      agent { label 'default' }   // use default Jenkins agent
       steps {
         checkout scm
       }
     }
 
     stage('Frontend Test & Lint') {
+      agent { label 'default' }   // run on default pod (with NodeJS tools)
       steps {
         dir('frontend') {
-          container('jnlp') {   // NodeJS runs in Jenkins agent container
-            sh '''
-              npm ci
-              npm run lint
-              npm test
-            '''
-          }
+          sh '''
+            npm ci
+            npm run lint
+            npm test
+          '''
         }
       }
     }
 
     stage('Backend Test & Lint') {
+      agent { label 'default' }   // run on default pod (with Python tools)
       steps {
         dir('backend') {
-          container('jnlp') {   // Python runs in Jenkins agent container
-            sh '''
-              pip install -r requirements.txt
-              flake8 .
-              pytest
-            '''
-          }
+          sh '''
+            pip install -r requirements.txt
+            flake8 .
+            pytest
+          '''
         }
       }
     }
 
     stage('Build & Push Frontend') {
-      steps {
-        container('kaniko') {
-          sh '''
-            /kaniko/executor \
-              --context=./frontend \
-              --dockerfile=./frontend/Dockerfile \
-              --destination=$FRONTEND_IMAGE \
-              --insecure \
-              --skip-tls-verify
-          '''
+      agent {
+        kubernetes {
+          label 'kaniko'
+          defaultContainer 'kaniko'
         }
+      }
+      steps {
+        sh '''
+          /kaniko/executor \
+            --context=./frontend \
+            --dockerfile=./frontend/Dockerfile \
+            --destination=$FRONTEND_IMAGE \
+            --insecure \
+            --skip-tls-verify
+        '''
       }
     }
 
     stage('Build & Push Backend') {
-      steps {
-        container('kaniko') {
-          sh '''
-            /kaniko/executor \
-              --context=./backend \
-              --dockerfile=./backend/Dockerfile \
-              --destination=$BACKEND_IMAGE \
-              --insecure \
-              --skip-tls-verify
-          '''
+      agent {
+        kubernetes {
+          label 'kaniko'
+          defaultContainer 'kaniko'
         }
+      }
+      steps {
+        sh '''
+          /kaniko/executor \
+            --context=./backend \
+            --dockerfile=./backend/Dockerfile \
+            --destination=$BACKEND_IMAGE \
+            --insecure \
+            --skip-tls-verify
+        '''
       }
     }
 
     stage('Deploy to Kubernetes') {
+      agent { label 'default' }   // use default pod where kubectl is available
       steps {
-        container('jnlp') {
-          sh 'kubectl apply -f k8s/'
-        }
+        sh 'kubectl apply -f k8s/'
       }
     }
   }
