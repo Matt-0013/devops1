@@ -70,6 +70,7 @@ spec:
       }
     }
 
+  stages {
     stage('Build & Push Images') {
       agent {
         kubernetes {
@@ -94,11 +95,25 @@ spec:
         container('kaniko') {
           withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
             sh '''
+              echo "🔑 Configuring DockerHub authentication..."
               mkdir -p /kaniko/.docker
               echo "{\"auths\":{\"https://index.docker.io/v1/\":{\"username\":\"$DOCKER_USER\",\"password\":\"$DOCKER_PASS\"}}}" > /kaniko/.docker/config.json
 
-              /kaniko/executor --context `pwd`/frontend --dockerfile `pwd`/frontend/Dockerfile --destination=$FRONTEND_IMAGE
-              /kaniko/executor --context `pwd`/backend --dockerfile `pwd`/backend/Dockerfile --destination=$BACKEND_IMAGE
+              echo "🚀 Building and pushing frontend image..."
+              /kaniko/executor \
+                --context=dir://$(pwd)/frontend \
+                --dockerfile=$(pwd)/frontend/Dockerfile \
+                --destination=$FRONTEND_IMAGE \
+                --cache=true \
+                --use-new-run
+
+              echo "🚀 Building and pushing backend image..."
+              /kaniko/executor \
+                --context=dir://$(pwd)/backend \
+                --dockerfile=$(pwd)/backend/Dockerfile \
+                --destination=$BACKEND_IMAGE \
+                --cache=true \
+                --use-new-run
             '''
           }
         }
@@ -106,8 +121,12 @@ spec:
     }
 
     stage('Deploy to Kubernetes') {
+      agent { label 'k8s-agent' }  // run on a node with kubectl
       steps {
-        sh 'kubectl apply -f k8s/'
+        sh '''
+          echo "🚀 Deploying to Kubernetes..."
+          kubectl apply -f k8s/
+        '''
       }
     }
   }
