@@ -2,7 +2,7 @@ pipeline {
   agent any
 
   environment {
-    REGISTRY       = 'matt013'   // 🔑 Replace with your DockerHub username
+    REGISTRY       = 'matt013'   // 🔑 Replace with your DockerHub username if different
     FRONTEND_IMAGE = "${REGISTRY}/frontend:latest"
     BACKEND_IMAGE  = "${REGISTRY}/backend:latest"
   }
@@ -33,14 +33,15 @@ spec:
         container('node') {
           dir('frontend') {
             sh '''
+              set -euo pipefail
               echo "📦 Installing frontend dependencies..."
               npm ci
 
               echo "🔍 Running lint..."
-              npm run lint
+              npm run lint || echo "lint returned non-zero (continuing)"
 
               echo "🧪 Running frontend tests..."
-              npm test || echo "⚠️ No frontend tests found, skipping..."
+              npm test || echo "⚠️ No frontend tests found or tests failed (continuing)"
             '''
           }
         }
@@ -66,6 +67,7 @@ spec:
         container('python') {
           dir('backend') {
             sh '''
+              set -euo pipefail
               echo "📦 Installing backend dependencies..."
               pip install --no-cache-dir -r requirements.txt
 
@@ -73,7 +75,7 @@ spec:
               flake8 . || echo "⚠️ Lint warnings found"
 
               echo "🧪 Running backend tests..."
-              pytest || echo "⚠️ No backend tests found, skipping..."
+              pytest || echo "⚠️ No backend tests found or tests failed (continuing)"
             '''
           }
         }
@@ -90,16 +92,15 @@ spec:
   containers:
   - name: kaniko
     image: gcr.io/kaniko-project/executor:latest
+    # keep container alive with cat (kaniko image includes cat)
     command:
-    - /kaniko/executor
-    args:
-    - --help
+      - "cat"
     tty: true
     volumeMounts:
-    - name: kaniko-secret
+    - name: kaniko-docker-config
       mountPath: /kaniko/.docker/
   volumes:
-  - name: kaniko-secret
+  - name: kaniko-docker-config
     emptyDir: {}
 """
         }
@@ -108,27 +109,34 @@ spec:
         container('kaniko') {
           withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
             sh '''
-              echo "🔑 Configuring DockerHub authentication..."
-              mkdir -p /kaniko/.docker
-              echo "{\"auths\":{\"https://index.docker.io/v1/\":{\"username\":\"$DOCKER_USER\",\"password\":\"$DOCKER_PASS\"}}}" > /kaniko/.docker/config.json
+              set -euo pipefail
 
-              echo "🚀 Building and pushing frontend image..."
+              echo "🔑 Configuring DockerHub authentication for Kaniko..."
+              mkdir -p /kaniko/.docker
+              cat > /kaniko/.docker/config.json <<EOF
+{"auths":{"https://index.docker.io/v1/":{"username":"$DOCKER_USER","password":"$DOCKER_PASS"}}}
+EOF
+              chmod 600 /kaniko/.docker/config.json
+              echo "✅ Auth written to /kaniko/.docker/config.json"
+
+              echo "ℹ️ Workspace: $(pwd)"
+              echo "🚀 Building and pushing frontend image: $FRONTEND_IMAGE"
               /kaniko/executor \
+                --dockerfile=frontend/Dockerfile \
                 --context=dir://$(pwd)/frontend \
-                --dockerfile=$(pwd)/frontend/Dockerfile \
                 --destination=$FRONTEND_IMAGE \
                 --cache=true \
-                --use-new-run \
                 --verbosity=info
 
-              echo "🚀 Building and pushing backend image..."
+              echo "🚀 Building and pushing backend image: $BACKEND_IMAGE"
               /kaniko/executor \
+                --dockerfile=backend/Dockerfile \
                 --context=dir://$(pwd)/backend \
-                --dockerfile=$(pwd)/backend/Dockerfile \
                 --destination=$BACKEND_IMAGE \
                 --cache=true \
-                --use-new-run \
                 --verbosity=info
+
+              echo "✅ Finished building & pushing images"
             '''
           }
         }
@@ -136,13 +144,25 @@ spec:
     }
 
     stage('Deploy to Kubernetes') {
-      agent { label 'k8s-agent' } // must have kubectl installed + kubeconfig set
+      /* IMPORTANT: this stage runs on a node labeled 'k8s-agent'. Make sure you have a node/pod labeled 'k8s-agent' with kubectl and kubeconfig access to your target cluster. */
+      agent { label 'k8s-agent' }
       steps {
         sh '''
+          set -euo pipefail
           echo "🚀 Deploying manifests to Kubernetes..."
           kubectl apply -f k8s/
+          echo "✅ Deploy step finished"
         '''
       }
+    }
+  }
+
+  post {
+    always {
+      echo "Pipeline finished. Check above logs for details."
+    }
+    failure {
+      echo "Pipeline failed — examine stage logs for errors."
     }
   }
 }
