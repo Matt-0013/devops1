@@ -2,7 +2,7 @@ pipeline {
   agent any
 
   environment {
-    REGISTRY       = 'your-dockerhub-username'   // 🔑 Replace with your DockerHub username
+    REGISTRY       = 'matt013'   // 🔑 Replace with your DockerHub username
     FRONTEND_IMAGE = "${REGISTRY}/frontend:latest"
     BACKEND_IMAGE  = "${REGISTRY}/backend:latest"
   }
@@ -91,10 +91,9 @@ spec:
   - name: kaniko
     image: gcr.io/kaniko-project/executor:latest
     command:
-    - /busybox/sh
+    - /kaniko/executor
     args:
-    - -c
-    - cat
+    - --help
     tty: true
     volumeMounts:
     - name: kaniko-secret
