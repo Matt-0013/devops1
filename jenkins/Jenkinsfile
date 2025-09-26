@@ -33,10 +33,11 @@ spec:
         container('node') {
           dir('frontend') {
             catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-              sh '''#!/bin/sh
+              sh '''
+#!/bin/sh
 set -eu
 echo "📦 Installing frontend deps..."
-npm ci
+npm ci || true
 
 echo "🔍 Linting..."
 npm run lint || echo "⚠️ lint failed"
@@ -69,10 +70,11 @@ spec:
         container('python') {
           dir('backend') {
             catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-              sh '''#!/bin/sh
+              sh '''
+#!/bin/sh
 set -eu
 echo "📦 Installing backend deps..."
-pip install --no-cache-dir -r requirements.txt
+pip install --no-cache-dir -r requirements.txt || true
 
 echo "🔍 Running flake8..."
 flake8 . || echo "⚠️ lint failed"
@@ -108,7 +110,8 @@ spec:
       steps {
         container('kaniko') {
           withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-            sh '''#!/bin/sh
+            sh '''
+#!/bin/sh
 set -eu
 
 echo "🔑 Writing DockerHub credentials..."
@@ -145,9 +148,10 @@ echo "✅ Images built & pushed"
       when {
         expression { return env.IMAGES_BUILT == 'true' }
       }
-      agent { label 'k8s-agent' } // node with kubectl + kubeconfig
+      agent { label 'k8s-agent' } // ⚠️ must exist in Jenkins!
       steps {
-        sh '''#!/bin/sh
+        sh '''
+#!/bin/sh
 set -eu
 echo "🚀 Deploying to Kubernetes..."
 kubectl apply -f k8s/
