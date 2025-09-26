@@ -70,7 +70,6 @@ spec:
       }
     }
 
-  stages {
     stage('Build & Push Images') {
       agent {
         kubernetes {
@@ -121,7 +120,7 @@ spec:
     }
 
     stage('Deploy to Kubernetes') {
-      agent { label 'k8s-agent' }  // run on a node with kubectl
+      agent { label 'k8s-agent' } // run on a node with kubectl
       steps {
         sh '''
           echo "🚀 Deploying to Kubernetes..."
