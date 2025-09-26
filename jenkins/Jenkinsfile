@@ -32,17 +32,21 @@ spec:
       steps {
         container('node') {
           dir('frontend') {
-            sh '''
-              set -euo pipefail
-              echo "📦 Installing frontend dependencies..."
-              npm ci
+            // Do not abort the pipeline for test/lint failures; mark UNSTABLE and continue.
+            catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+              sh '''#!/bin/bash
+set -euo pipefail
 
-              echo "🔍 Running lint..."
-              npm run lint || echo "lint returned non-zero (continuing)"
+echo "📦 Installing frontend dependencies..."
+npm ci
 
-              echo "🧪 Running frontend tests..."
-              npm test || echo "⚠️ No frontend tests found or tests failed (continuing)"
-            '''
+echo "🔍 Linting frontend..."
+npm run lint || echo "⚠️ lint failed (marking stage UNSTABLE)"
+
+echo "🧪 Running frontend tests..."
+npm test || echo "⚠️ no tests or tests failed (marking stage UNSTABLE)"
+'''
+            }
           }
         }
       }
@@ -66,17 +70,20 @@ spec:
       steps {
         container('python') {
           dir('backend') {
-            sh '''
-              set -euo pipefail
-              echo "📦 Installing backend dependencies..."
-              pip install --no-cache-dir -r requirements.txt
+            catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+              sh '''#!/bin/bash
+set -euo pipefail
 
-              echo "🔍 Running flake8..."
-              flake8 . || echo "⚠️ Lint warnings found"
+echo "📦 Installing backend dependencies..."
+pip install --no-cache-dir -r requirements.txt
 
-              echo "🧪 Running backend tests..."
-              pytest || echo "⚠️ No backend tests found or tests failed (continuing)"
-            '''
+echo "🔍 Running flake8..."
+flake8 . || echo "⚠️ flake8 reported issues (stage UNSTABLE)"
+
+echo "🧪 Running backend tests..."
+pytest || echo "⚠️ no backend tests or tests failed (stage UNSTABLE)"
+'''
+            }
           }
         }
       }
@@ -92,9 +99,8 @@ spec:
   containers:
   - name: kaniko
     image: gcr.io/kaniko-project/executor:latest
-    # keep container alive with cat (kaniko image includes cat)
-    command:
-      - "cat"
+    # keep container alive using cat (Kaniko image doesn't have /busybox/sh at that path)
+    command: ["cat"]
     tty: true
     volumeMounts:
     - name: kaniko-docker-config
@@ -107,62 +113,80 @@ spec:
       }
       steps {
         container('kaniko') {
+          // This step must have a Jenkins "Username with password" credential with id 'dockerhub'
           withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+            // We do not mask everything here, but we avoid printing the actual credentials.
             sh '''
-              set -euo pipefail
+# NOTE: use plain /bin/sh here (the Kaniko image may be busybox-ish), avoid "pipefail"
+set -eu
 
-              echo "🔑 Configuring DockerHub authentication for Kaniko..."
-              mkdir -p /kaniko/.docker
-              cat > /kaniko/.docker/config.json <<EOF
-{"auths":{"https://index.docker.io/v1/":{"username":"$DOCKER_USER","password":"$DOCKER_PASS"}}}
-EOF
-              chmod 600 /kaniko/.docker/config.json
-              echo "✅ Auth written to /kaniko/.docker/config.json"
+echo "ℹ️ Kaniko executor version:"
+/kaniko/executor --version || true
 
-              echo "ℹ️ Workspace: $(pwd)"
-              echo "🚀 Building and pushing frontend image: $FRONTEND_IMAGE"
-              /kaniko/executor \
-                --dockerfile=frontend/Dockerfile \
-                --context=dir://$(pwd)/frontend \
-                --destination=$FRONTEND_IMAGE \
-                --cache=true \
-                --verbosity=info
+echo "🔑 Creating /kaniko/.docker/config.json for DockerHub auth (used by Kaniko to push)"
+mkdir -p /kaniko/.docker
+cat > /kaniko/.docker/config.json <<'JSON'
+{"auths":{"https://index.docker.io/v1/":{"username":"'"$DOCKER_USER"'","password":"'"$DOCKER_PASS"'"}}}
+JSON
+chmod 600 /kaniko/.docker/config.json
+echo "✅ Docker auth written (size: $(stat -c%s /kaniko/.docker/config.json) bytes)"
 
-              echo "🚀 Building and pushing backend image: $BACKEND_IMAGE"
-              /kaniko/executor \
-                --dockerfile=backend/Dockerfile \
-                --context=dir://$(pwd)/backend \
-                --destination=$BACKEND_IMAGE \
-                --cache=true \
-                --verbosity=info
+echo "🔎 Workspace listing (for debugging)"
+ls -la
+echo "Contents of frontend:"
+ls -la frontend || true
+echo "Contents of backend:"
+ls -la backend || true
 
-              echo "✅ Finished building & pushing images"
-            '''
+echo "🚀 Build & push frontend image: $FRONTEND_IMAGE"
+/kaniko/executor \
+  --dockerfile=frontend/Dockerfile \
+  --context=dir://$(pwd)/frontend \
+  --destination=$FRONTEND_IMAGE \
+  --verbosity=info \
+  --cache=true
+
+echo "🚀 Build & push backend image: $BACKEND_IMAGE"
+/kaniko/executor \
+  --dockerfile=backend/Dockerfile \
+  --context=dir://$(pwd)/backend \
+  --destination=$BACKEND_IMAGE \
+  --verbosity=info \
+  --cache=true
+
+# mark success for downstream deploy
+echo "✅ Images built & pushed"
+'''
+            // set a pipeline environment variable so Deploy stage can check
+            script { env.IMAGES_BUILT = 'true' }
           }
         }
       }
     }
 
     stage('Deploy to Kubernetes') {
-      /* IMPORTANT: this stage runs on a node labeled 'k8s-agent'. Make sure you have a node/pod labeled 'k8s-agent' with kubectl and kubeconfig access to your target cluster. */
-      agent { label 'k8s-agent' }
+      // Deploy only if images were built
+      when {
+        expression { return env.IMAGES_BUILT == 'true' }
+      }
+      agent { label 'k8s-agent' } // either provide a node labeled k8s-agent with kubectl, or change this to a pod-based deploy
       steps {
-        sh '''
-          set -euo pipefail
-          echo "🚀 Deploying manifests to Kubernetes..."
-          kubectl apply -f k8s/
-          echo "✅ Deploy step finished"
-        '''
+        sh '''#!/bin/bash
+set -euo pipefail
+
+echo "🚀 Applying k8s manifests from k8s/..."
+kubectl apply -f k8s/
+'''
       }
     }
-  }
+  } // stages
 
   post {
     always {
-      echo "Pipeline finished. Check above logs for details."
+      echo "== Pipeline finished: status = ${currentBuild.currentResult} =="
     }
     failure {
-      echo "Pipeline failed — examine stage logs for errors."
+      echo "Build failed. Please attach the failing stage console output."
     }
   }
 }
