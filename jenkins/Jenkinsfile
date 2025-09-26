@@ -98,27 +98,22 @@ spec:
   containers:
   - name: kaniko
     image: gcr.io/kaniko-project/executor:latest
+    tty: true
     volumeMounts:
-    - name: kaniko-docker-config
+    - name: docker-config
       mountPath: /kaniko/.docker/
   volumes:
-  - name: kaniko-docker-config
-    emptyDir: {}
+  - name: docker-config
+    secret:
+      secretName: dockerhub-secret
 """
         }
       }
       steps {
         container('kaniko') {
-          withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-            sh '''
+          sh '''
 #!/bin/sh
 set -eu
-
-echo "🔑 Writing DockerHub credentials..."
-mkdir -p /kaniko/.docker
-cat > /kaniko/.docker/config.json <<JSON
-{"auths":{"https://index.docker.io/v1/":{"username":"$DOCKER_USER","password":"$DOCKER_PASS"}}}
-JSON
 
 echo "🚀 Building frontend image..."
 /kaniko/executor \
@@ -136,10 +131,9 @@ echo "🚀 Building backend image..."
   --cache=true \
   --verbosity=info
 
-echo "✅ Images built & pushed"
+echo "✅ Images built & pushed successfully!"
 '''
-            script { env.IMAGES_BUILT = 'true' }
-          }
+          script { env.IMAGES_BUILT = 'true' }
         }
       }
     }
@@ -148,7 +142,6 @@ echo "✅ Images built & pushed"
       when {
         expression { return env.IMAGES_BUILT == 'true' }
       }
-      agent { label 'k8s-agent' } // ⚠️ must exist in Jenkins!
       steps {
         sh '''
 #!/bin/sh
